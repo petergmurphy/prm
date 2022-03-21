@@ -38,6 +38,7 @@ type PuppetVersion struct {
 }
 
 type ValidateYmlContent struct {
+	Name  string     `yaml:"name"`
 	Tools []ToolInst `yaml:"tools"`
 }
 
@@ -77,20 +78,20 @@ func (*Prm) checkGroups(tools []ToolInst) []ToolInst {
 // list of tool names from validate.yml into a list. Pass the list of
 // tool names to flattenToolList to expand out any groups. Then return
 // the complete list.
-func (p *Prm) CheckLocalConfig() ([]ToolInst, error) {
+func (p *Prm) CheckLocalConfig() ([]ToolInst, string, error) {
 	// check if validate.yml exits in the codeDir
 	validateFile := filepath.Join(p.CodeDir, "validate.yml")
 	if _, err := p.AFS.Stat(validateFile); err != nil {
 		log.Error().Msgf("validate.yml not found in %s", p.CodeDir)
 		log.Info().Msgf("Reference the 'prm help exec' help section for exec command usage.")
-		return []ToolInst{}, err
+		return []ToolInst{}, "", err
 	}
 
 	// read in validate.yml
 	contents, err := p.AFS.ReadFile(validateFile)
 	if err != nil {
 		log.Error().Msgf("Error reading validate.yml: %s", err)
-		return []ToolInst{}, err
+		return []ToolInst{}, "", err
 	}
 
 	// parse validate.yml to our temporary struct
@@ -98,10 +99,10 @@ func (p *Prm) CheckLocalConfig() ([]ToolInst, error) {
 	err = yaml.Unmarshal(contents, &userList)
 	if err != nil {
 		log.Error().Msgf("validate.yml is not formated correctly: %s", err)
-		return []ToolInst{}, err
+		return []ToolInst{}, "", err
 	}
 
-	return p.checkGroups(userList.Tools), nil
+	return p.checkGroups(userList.Tools), userList.Name, nil
 }
 
 // Check to see if the requested tool can be found installed.

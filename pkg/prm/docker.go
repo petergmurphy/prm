@@ -244,7 +244,7 @@ func (d *Docker) ImageName(tool *Tool, prmConfig Config) string {
 	return imageName
 }
 
-func (d *Docker) Validate(tool *Tool, prmConfig Config, paths DirectoryPaths, outputSettings OutputSettings) (ValidateExitCode, error) {
+func (d *Docker) Validate(tool *Tool, args []string, prmConfig Config, paths DirectoryPaths, outputSettings OutputSettings) (ValidateExitCode, error) {
 	// is Docker up and running?
 	status := d.Status()
 	if !status.IsAvailable {
@@ -262,6 +262,10 @@ func (d *Docker) Validate(tool *Tool, prmConfig Config, paths DirectoryPaths, ou
 	containerConf := container.Config{
 		Image: d.ImageName(tool, prmConfig),
 		Tty:   false,
+	}
+
+	if len(args) > 0 {
+		containerConf.Cmd = args
 	}
 
 	resp, err := d.Client.ContainerCreate(d.Context,
@@ -322,7 +326,7 @@ func (d *Docker) Validate(tool *Tool, prmConfig Config, paths DirectoryPaths, ou
 
 		if outputSettings.OutputLocation == "file" {
 			if _, err := os.Stat(outputSettings.OutputDir); os.IsNotExist(err) {
-				err = d.AFS.Mkdir(outputSettings.OutputDir, 0750)
+				err = d.AFS.MkdirAll(outputSettings.OutputDir, 0750)
 				if err != nil {
 					return VALIDATION_ERROR, err
 				}

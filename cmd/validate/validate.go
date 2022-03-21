@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/shlex"
 	"github.com/puppetlabs/prm/internal/pkg/utils"
 
 	"github.com/puppetlabs/pdkgo/pkg/telemetry"
@@ -28,6 +29,8 @@ var (
 	alwaysBuild bool
 	toolTimeout int
 	resultsView string
+	isSerial    bool
+	workerCount int
 )
 
 func CreateCommand(parent *prm.Prm) *cobra.Command {
@@ -86,6 +89,14 @@ func CreateCommand(parent *prm.Prm) *cobra.Command {
 
 	tmp.Flags().StringVar(&resultsView, "resultsView", "terminal", "Controls where results are outputted to, either 'terminal' or 'file' (Defaults: single tool = 'terminal', multiple tools = 'file')")
 	err = viper.BindPFlag("resultsView", tmp.Flags().Lookup("resultsView"))
+	cobra.CheckErr(err)
+
+	tmp.Flags().BoolVar(&isSerial, "serial", false, "Runs validation one tool at a time instead of in parallel")
+	err = viper.BindPFlag("serial", tmp.Flags().Lookup("serial"))
+	cobra.CheckErr(err)
+
+	tmp.Flags().IntVar(&workerCount, "workerCount", 10, "Worker count for running validation tools in parallel (default: 10)")
+	err = viper.BindPFlag("workerCount", tmp.Flags().Lookup("workerCount"))
 	cobra.CheckErr(err)
 
 	return tmp
@@ -177,6 +188,11 @@ func execute(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
 	if selectedTool != "" {
 		// get the tool from the cache
 		cachedTool, ok := prmApi.IsToolAvailable(selectedTool)
@@ -184,40 +200,54 @@ func execute(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("Tool %s not found in cache", selectedTool)
 		}
 
-		workingDir, err := os.Getwd()
+		var additionalToolArgs []string
+		if toolArgs != "" {
+			additionalToolArgs, _ = shlex.Split(toolArgs)
+		}
+
+		log.Debug().Msgf("Working Directory: %v", workingDir)
+		err = prmApi.Validate(cachedTool, additionalToolArgs, prm.OutputSettings{OutputLocation: resultsView, OutputDir: path.Join(workingDir, ".prm-validate")})
+		if err != nil {
+			return err
+		}
+	} else {
+		// No tool specified, so check if their code contains a validate.yml, which returns the list of tools
+		// Their code is expected to be in the directory where the executable is run from
+		toolsAvailable, groupName, err := prmApi.CheckLocalConfig()
 		if err != nil {
 			return err
 		}
 
-		log.Debug().Msgf("Working Directory: %v", workingDir)
-		err = prmApi.Validate(cachedTool, prm.OutputSettings{OutputLocation: resultsView, OutputDir: path.Join(workingDir, ".prm-validate")})
+		outputDir := path.Join(workingDir, ".prm-validate")
+		if groupName != "" {
+			log.Info().Msgf("Found tool group: %v ", groupName)
+			outputDir = path.Join(outputDir, groupName)
+		} else {
+			log.Info().Msgf("Found tools: %v ", toolsAvailable)
+		}
+
+		// Gather a list of tools
+		var toolList []prm.ToolInfo
+		for _, tool := range toolsAvailable {
+			cachedTool, ok := prmApi.IsToolAvailable(tool.Name)
+			if !ok {
+				return fmt.Errorf("Tool %s not found in cache", tool)
+			}
+			info := prm.ToolInfo{Tool: cachedTool, Args: tool.Args, OutputSettings: prm.OutputSettings{OutputLocation: resultsView, OutputDir: outputDir}}
+			toolList = append(toolList, info)
+		}
+
+		if isSerial && cmd.Flags().Changed("workerCount") {
+			log.Warn().Msgf("The --workerCount flag has no affect when used with the --serial flag")
+		}
+		if isSerial || workerCount < 1 {
+			workerCount = 1
+		}
+		err = prmApi.ValidateTools(toolList, workerCount)
 		if err != nil {
 			return err
 		}
 	}
-	// Uncomment when implementing validate.yml
-	// else {
-	// 	// No tool specified, so check if their code contains a validate.yml, which returns the list of tools
-	// 	// Their code is expected to be in the directory where the executable is run from
-	// 	toolList, err := prmApi.CheckLocalConfig()
-	// 	if err != nil {
-	// 		return err
-	// 	}
-
-	// 	log.Info().Msgf("Found tools: %v ", toolList)
-
-	// 	for _, tool := range toolList {
-	// 		cachedTool, ok := prmApi.IsToolAvailable(tool.Name)
-	// 		if !ok {
-	// 			return fmt.Errorf("Tool %s not found in cache", tool)
-	// 		}
-
-	// 		err := prmApi.Exec(cachedTool, tool.Args)
-	// 		if err != nil {
-	// 			return err
-	// 		}
-	// 	}
-	// }
 
 	return nil
 }
